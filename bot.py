@@ -15,7 +15,6 @@ from telegram import (
 from telegram.ext import (
     Application,
     CommandHandler,
-    ContextTypes,
 )
 
 
@@ -24,10 +23,16 @@ from telegram.ext import (
 # =========================================================
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-SOURCE_CHAT_ID = int(os.environ["SOURCE_CHAT_ID"])
+SOURCE_CHAT_ID = os.environ.get(
+    "SOURCE_CHAT_ID",
+    "@mvshared"
+)
+
 WEBHOOK_SECRET = os.environ["WEBHOOK_SECRET"]
 
-PORT = int(os.environ.get("PORT", "10000"))
+PORT = int(
+    os.environ.get("PORT", "10000")
+)
 
 
 # =========================================================
@@ -63,7 +68,7 @@ application = (
 
 
 # =========================================================
-# SIMPLE MEMORY STORAGE
+# LATEST CONTENT
 # =========================================================
 
 latest_content = {
@@ -78,6 +83,7 @@ latest_content = {
 # =========================================================
 
 def extract_url(text):
+
     if not text:
         return None
 
@@ -89,21 +95,40 @@ def extract_url(text):
     if not match:
         return None
 
-    url = match.group(0)
-
-    # Remove common trailing characters
-    url = url.rstrip(".,!?)]}")
-
-    return url
+    return match.group(0).rstrip(
+        ".,!?)]}"
+    )
 
 
 # =========================================================
-# EXTRACT SOURCE CONTENT
+# CHECK SOURCE
+# =========================================================
+
+def is_source_chat(chat):
+
+    if not chat:
+        return False
+
+    if chat.username:
+        return (
+            chat.username.lower()
+            == SOURCE_CHAT_ID.lstrip("@").lower()
+        )
+
+    return False
+
+
+# =========================================================
+# EXTRACT CONTENT
 # =========================================================
 
 def extract_content(message):
 
-    text = message.caption or message.text or ""
+    text = (
+        message.caption
+        or message.text
+        or ""
+    )
 
     url = extract_url(text)
 
@@ -112,16 +137,26 @@ def extract_content(message):
 
     image_file_id = None
 
-    # Telegram photo
+    # Photo
     if message.photo:
-        image_file_id = message.photo[-1].file_id
 
-    # Telegram image document
+        image_file_id = (
+            message.photo[-1].file_id
+        )
+
+    # Image document
     elif message.document:
-        mime = message.document.mime_type or ""
+
+        mime = (
+            message.document.mime_type
+            or ""
+        )
 
         if mime.startswith("image/"):
-            image_file_id = message.document.file_id
+
+            image_file_id = (
+                message.document.file_id
+            )
 
     if not image_file_id:
         return None
@@ -129,15 +164,18 @@ def extract_content(message):
     return {
         "image_file_id": image_file_id,
         "url": url,
-        "source_message_id": message.message_id,
+        "source_message_id":
+            message.message_id,
     }
 
 
 # =========================================================
-# PROCESS TELEGRAM UPDATE
+# PROCESS UPDATE
 # =========================================================
 
-async def process_update(update_data):
+async def process_update(
+    update_data
+):
 
     update = Update.de_json(
         update_data,
@@ -148,39 +186,49 @@ async def process_update(update_data):
 
     # New channel post
     if update.channel_post:
-        message = update.channel_post
+
+        message = (
+            update.channel_post
+        )
 
     # Edited channel post
     elif update.edited_channel_post:
-        message = update.edited_channel_post
 
-    # Group message
-    elif update.message:
-        message = update.message
-
-    # Edited group message
-    elif update.edited_message:
-        message = update.edited_message
+        message = (
+            update.edited_channel_post
+        )
 
     if not message:
         return
 
-    if message.chat.id != SOURCE_CHAT_ID:
-        return
-
-    content = extract_content(message)
-
-    if not content:
+    # Make sure this is our channel
+    if not is_source_chat(
+        message.chat
+    ):
         logger.info(
-            "Ignored source message %s",
-            message.message_id
+            "Ignored chat: %s",
+            message.chat.id
         )
         return
 
-    latest_content.update(content)
+    content = extract_content(
+        message
+    )
+
+    if not content:
+
+        logger.info(
+            "Message ignored: no image/link"
+        )
+
+        return
+
+    latest_content.update(
+        content
+    )
 
     logger.info(
-        "Content updated: message_id=%s url=%s",
+        "CONTENT UPDATED | message=%s | url=%s",
         content["source_message_id"],
         content["url"],
     )
@@ -192,13 +240,17 @@ async def process_update(update_data):
 
 async def start_command(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: object
 ):
 
-    if not latest_content["image_file_id"]:
+    if not latest_content[
+        "image_file_id"
+    ]:
+
         await update.message.reply_text(
             "Content is not available yet."
         )
+
         return
 
     keyboard = InlineKeyboardMarkup(
@@ -206,20 +258,24 @@ async def start_command(
             [
                 InlineKeyboardButton(
                     "▶️ WATCH HERE",
-                    url=latest_content["url"]
+                    url=latest_content[
+                        "url"
+                    ],
                 )
             ]
         ]
     )
 
     await update.message.reply_photo(
-        photo=latest_content["image_file_id"],
-        reply_markup=keyboard
+        photo=latest_content[
+            "image_file_id"
+        ],
+        reply_markup=keyboard,
     )
 
 
 # =========================================================
-# REGISTER HANDLERS
+# REGISTER COMMAND
 # =========================================================
 
 application.add_handler(
@@ -239,7 +295,8 @@ def home():
 
     return jsonify({
         "status": "online",
-        "bot": "telegram-video-bot"
+        "bot": "@mvshered_bot",
+        "source": "@mvshared",
     })
 
 
@@ -253,13 +310,14 @@ def home():
 )
 def telegram_webhook():
 
-    # Verify secret
     secret = request.headers.get(
         "X-Telegram-Bot-Api-Secret-Token"
     )
 
     if secret != WEBHOOK_SECRET:
+
         return jsonify({
+            "ok": False,
             "error": "unauthorized"
         }), 401
 
@@ -279,7 +337,7 @@ def telegram_webhook():
             "ok": True
         })
 
-    except Exception as e:
+    except Exception as error:
 
         logger.exception(
             "Webhook error"
@@ -287,12 +345,12 @@ def telegram_webhook():
 
         return jsonify({
             "ok": False,
-            "error": str(e)
+            "error": str(error)
         }), 500
 
 
 # =========================================================
-# START WEBHOOK
+# WEBHOOK SETUP
 # =========================================================
 
 @app.route(
@@ -301,10 +359,13 @@ def telegram_webhook():
 )
 def setup_webhook():
 
-    base_url = request.host_url.rstrip("/")
+    base_url = (
+        request.host_url.rstrip("/")
+    )
 
     webhook_url = (
-        f"{base_url}/telegram/webhook"
+        base_url
+        + "/telegram/webhook"
     )
 
     asyncio.run(
@@ -312,17 +373,17 @@ def setup_webhook():
             url=webhook_url,
             secret_token=WEBHOOK_SECRET,
             allowed_updates=[
-                "message",
-                "edited_message",
                 "channel_post",
                 "edited_channel_post",
+                "message",
             ],
+            drop_pending_updates=True,
         )
     )
 
     return jsonify({
         "ok": True,
-        "webhook": webhook_url
+        "webhook": webhook_url,
     })
 
 
